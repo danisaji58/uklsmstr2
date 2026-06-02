@@ -1,13 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Lock, Mail, Flame } from "lucide-react";
-import { sampleUsers, type User } from "@/lib/data";
+import { Lock, Mail, Flame, AlertCircle, RefreshCw } from "lucide-react";
+import { type User } from "@/lib/data";
 import { login } from "@/lib/auth";
+import { getMe } from "@/lib/services/userService";
 
 interface LoginPageProps {
   onLogin: (user: User) => void;
@@ -25,37 +32,49 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setError("");
 
     try {
+      // 1. Login — dapatkan token
       const result = await login(email, password);
 
-      console.log("Login berhasil:", result);
+      // 2. Simpan token ke localStorage
+      const token = result.accessToken ?? result.token ?? result.access_token;
+      if (token) {
+        localStorage.setItem("token", token);
+      }
 
-      // Simpan token
-      localStorage.setItem("token", result.accessToken);
+      // 3. Fetch data user terbaru (termasuk saldo) via /api/me
+      let userData: User;
+      try {
+        userData = await getMe();
+      } catch {
+        // Fallback jika /api/me tidak tersedia: pakai data dari response login
+        const raw = result.user ?? result;
+        userData = {
+          id: String(raw.id),
+          name: raw.name,
+          email: raw.email,
+          role: String(raw.role).toLowerCase() === "kasir" ? "kasir" : "pembeli",
+          balance: raw.balance ?? raw.saldo ?? 0,
+        };
+      }
 
-      // Masuk ke dashboard
-      onLogin({
-        id: String(result.user.id),
-        name: result.user.name,
-        email: result.user.email,
-        role:
-          result.user.role === "KASIR"
-            ? "kasir"
-            : "pembeli",
-        balance: 0,
-      });
-    } catch (error) {
-      console.error(error);
-      setError("Email atau password salah");
+      onLogin(userData);
+    } catch (err) {
+      console.error("Login error:", err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Terjadi kesalahan. Coba lagi.";
+      // Tampilkan pesan yang ramah
+      setError(
+        message.toLowerCase().includes("401") ||
+          message.toLowerCase().includes("invalid") ||
+          message.toLowerCase().includes("salah") ||
+          message.toLowerCase().includes("incorrect")
+          ? "Email atau password salah."
+          : `Gagal login: ${message}`
+      );
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleQuickLogin = (role: "pembeli" | "kasir") => {
-    const user = sampleUsers.find((u) => u.role === role);
-
-    if (user) {
-      onLogin(user);
     }
   };
 
@@ -76,9 +95,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             <CardTitle className="text-2xl font-bold text-foreground">
               Mie Gacoan
             </CardTitle>
-
             <CardDescription className="text-muted-foreground mt-1">
-              Point of Sale & Kiosk System
+              Point of Sale &amp; Kiosk System
             </CardDescription>
           </div>
         </CardHeader>
@@ -87,10 +105,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
                 <Input
                   id="email"
                   type="email"
@@ -99,16 +115,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   onChange={(e) => setEmail(e.target.value)}
                   className="pl-10"
                   required
+                  autoComplete="email"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
                 <Input
                   id="password"
                   type="password"
@@ -117,22 +132,27 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-10"
                   required
+                  autoComplete="current-password"
                 />
               </div>
             </div>
 
             {error && (
-              <p className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
-                {error}
-              </p>
+              <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
             )}
 
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={isLoading}
-            >
-              {isLoading ? "Memproses..." : "Login"}
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                "Login"
+              )}
             </Button>
           </form>
         </CardContent>
