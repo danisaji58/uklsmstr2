@@ -108,6 +108,33 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
     };
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMenus = async () => {
+      setIsMenuLoading(true);
+      setMenuError("");
+
+      try {
+        const menus = await getMenus();
+        if (isMounted) setMenuItems(menus);
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setMenuError(error instanceof Error ? error.message : "Gagal mengambil menu dari backend");
+        }
+      } finally {
+        if (isMounted) setIsMenuLoading(false);
+      }
+    };
+
+    loadMenus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const filteredMenu = useMemo(() => {
     return menuItems.filter((item) => {
       const matchesSearch = item.name
@@ -172,6 +199,14 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
       return;
     }
     if (cart.length === 0) return;
+
+    try {
+      await createTransaction(user.id, cart.map((item) => ({ menuId: item.id, quantity: item.quantity })));
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Gagal membuat transaksi");
+      return;
+    }
 
     try {
       await createTransaction(user.id, cart.map((item) => ({ menuId: item.id, quantity: item.quantity })));
