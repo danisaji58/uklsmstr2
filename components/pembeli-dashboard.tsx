@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,13 +31,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { 
-  menuItems, 
   categoryPlaceholders,
   type User, 
   type MenuItem, 
   type CartItem, 
   formatCurrency 
 } from "@/lib/data";
+import { createTransaction, getMenus } from "@/lib/api";
 
 interface PembeliDashboardProps {
   user: User;
@@ -69,11 +69,41 @@ interface ReceiptData {
 }
 
 export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDashboardProps) {
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [isMenuLoading, setIsMenuLoading] = useState(true);
+  const [menuError, setMenuError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMenus = async () => {
+      setIsMenuLoading(true);
+      setMenuError("");
+
+      try {
+        const menus = await getMenus();
+        if (isMounted) setMenuItems(menus);
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setMenuError(error instanceof Error ? error.message : "Gagal mengambil menu dari backend");
+        }
+      } finally {
+        if (isMounted) setIsMenuLoading(false);
+      }
+    };
+
+    loadMenus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const filteredMenu = useMemo(() => {
     return menuItems.filter((item) => {
@@ -81,7 +111,7 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
       const matchesCategory = activeCategory === "all" || item.category === activeCategory;
       return matchesSearch && matchesCategory;
     });
-  }, [searchQuery, activeCategory]);
+  }, [menuItems, searchQuery, activeCategory]);
 
   const cartTotal = useMemo(() => {
     return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -126,9 +156,17 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
     setCart((prev) => prev.filter((item) => item.id !== itemId));
   };
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cartTotal > user.balance) {
       alert("Saldo tidak mencukupi! Silakan top up saldo Anda.");
+      return;
+    }
+
+    try {
+      await createTransaction(user.id, cart.map((item) => ({ menuId: item.id, quantity: item.quantity })));
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Gagal membuat transaksi");
       return;
     }
 
@@ -239,6 +277,18 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
       <main className="flex-1 container mx-auto px-4 py-6 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 min-w-0 max-w-full">
         {/* Product Area */}
         <section className="product-area min-w-0 flex flex-col gap-6 w-full pb-20 md:pb-4">
+          {menuError && (
+            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+              {menuError}
+            </div>
+          )}
+
+          {isMenuLoading ? (
+            <div className="text-center py-12 bg-card rounded-xl border border-border">
+              <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4 animate-pulse" />
+              <p className="text-muted-foreground font-medium">Memuat menu dari backend...</p>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
             {filteredMenu.map((item) => (
               <MenuCard 
@@ -249,8 +299,9 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
               />
             ))}
           </div>
+          )}
           
-          {filteredMenu.length === 0 && (
+          {!isMenuLoading && filteredMenu.length === 0 && (
             <div className="text-center py-12 bg-card rounded-xl border border-border">
               <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
               <p className="text-muted-foreground font-medium">Menu tidak ditemukan</p>
