@@ -1,13 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Lock, Mail, Flame } from "lucide-react";
 import { type User } from "@/lib/data";
 import { login } from "@/lib/auth";
+import { getMe } from "@/lib/services/userService";
 
 interface LoginPageProps {
   onLogin: (user: User) => void;
@@ -25,6 +32,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setError("");
 
     try {
+      // 1. Login — dapatkan token
       const result = await login(email, password);
 
       onLogin(result.user);
@@ -35,7 +43,6 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       setIsLoading(false);
     }
   };
-
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -54,9 +61,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             <CardTitle className="text-2xl font-bold text-foreground">
               Mie Gacoan
             </CardTitle>
-
             <CardDescription className="text-muted-foreground mt-1">
-              Point of Sale & Kiosk System
+              Point of Sale &amp; Kiosk System
             </CardDescription>
           </div>
         </CardHeader>
@@ -65,10 +71,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
                 <Input
                   id="email"
                   type="email"
@@ -77,16 +81,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   onChange={(e) => setEmail(e.target.value)}
                   className="pl-10"
                   required
+                  autoComplete="email"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
                 <Input
                   id="password"
                   type="password"
@@ -95,22 +98,27 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-10"
                   required
+                  autoComplete="current-password"
                 />
               </div>
             </div>
 
             {error && (
-              <p className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
-                {error}
-              </p>
+              <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
             )}
 
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={isLoading}
-            >
-              {isLoading ? "Memproses..." : "Login"}
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                "Login"
+              )}
             </Button>
           </form>
         </CardContent>

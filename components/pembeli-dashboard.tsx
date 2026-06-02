@@ -22,6 +22,8 @@ import {
   ChefHat,
   X,
   Printer,
+  RefreshCw,
+  ServerCrash,
 } from "lucide-react";
 import {
   Dialog,
@@ -30,12 +32,12 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { 
+import {
   categoryPlaceholders,
-  type User, 
-  type MenuItem, 
-  type CartItem, 
-  formatCurrency 
+  type User,
+  type MenuItem,
+  type CartItem,
+  formatCurrency,
 } from "@/lib/data";
 import { createTransaction, getMenus } from "@/lib/api";
 
@@ -59,7 +61,6 @@ const categoryLabels = {
   topping: "Topping",
 };
 
-// Receipt data interface
 interface ReceiptData {
   transactionId: string;
   date: Date;
@@ -77,6 +78,35 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMenus = async () => {
+      setIsMenuLoading(true);
+      setMenuError("");
+
+      try {
+        const menus = await getMenus();
+        if (isMounted) setMenuItems(menus);
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setMenuError(error instanceof Error ? error.message : "Gagal mengambil menu dari backend");
+        }
+      } finally {
+        if (isMounted) setIsMenuLoading(false);
+      }
+    };
+
+    loadMenus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -107,23 +137,28 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
 
   const filteredMenu = useMemo(() => {
     return menuItems.filter((item) => {
-      const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesCategory = activeCategory === "all" || item.category === activeCategory;
+      const matchesSearch = item.name
+        .toLowerCase()
+        .includes(searchQuery.toLowerCase());
+      const matchesCategory =
+        activeCategory === "all" || item.category === activeCategory;
       return matchesSearch && matchesCategory;
     });
   }, [menuItems, searchQuery, activeCategory]);
 
-  const cartTotal = useMemo(() => {
-    return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  }, [cart]);
+  const cartTotal = useMemo(
+    () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    [cart]
+  );
 
-  const cartItemCount = useMemo(() => {
-    return cart.reduce((sum, item) => sum + item.quantity, 0);
-  }, [cart]);
+  const cartItemCount = useMemo(
+    () => cart.reduce((sum, item) => sum + item.quantity, 0),
+    [cart]
+  );
 
+  // ─── Cart actions ──────────────────────────────────────────────────────────
   const addToCart = (item: MenuItem) => {
     if (item.stock === 0) return;
-    
     setCart((prev) => {
       const existing = prev.find((i) => i.id === item.id);
       if (existing) {
@@ -137,8 +172,8 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
   };
 
   const updateQuantity = (itemId: string, delta: number) => {
-    setCart((prev) => {
-      return prev
+    setCart((prev) =>
+      prev
         .map((item) => {
           if (item.id === itemId) {
             const newQuantity = item.quantity + delta;
@@ -148,8 +183,8 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
           }
           return item;
         })
-        .filter(Boolean) as CartItem[];
-    });
+        .filter(Boolean) as CartItem[]
+    );
   };
 
   const removeFromCart = (itemId: string) => {
@@ -158,7 +193,18 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
 
   const handleCheckout = async () => {
     if (cartTotal > user.balance) {
-      alert("Saldo tidak mencukupi! Silakan top up saldo Anda.");
+      setCheckoutError(
+        "Saldo tidak mencukupi! Silakan top up saldo Anda di kasir."
+      );
+      return;
+    }
+    if (cart.length === 0) return;
+
+    try {
+      await createTransaction(user.id, cart.map((item) => ({ menuId: item.id, quantity: item.quantity })));
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Gagal membuat transaksi");
       return;
     }
 
@@ -179,190 +225,253 @@ export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDas
       total: cartTotal,
     };
 
-    // Update balance and clear cart
-    const newBalance = user.balance - cartTotal;
-    onBalanceUpdate(newBalance);
+    // Generate receipt data dari response backend
+    const receipt: ReceiptData = {
+      transactionId:
+        txn.transactionId ??
+        txn.id ??
+        `TRX-${Date.now().toString(36).toUpperCase()}`,
+      date: txn.date ? new Date(txn.date) : new Date(),
+      customerName: user.name,
+      items: [...cart],
+      total: cartTotal,
+    };
+
+    // Ambil saldo terbaru dari backend setelah transaksi
+    try {
+      const me = await getMe();
+      onBalanceUpdate(me.balance);
+    } catch {
+      // Fallback: kurangi saldo secara lokal
+      onBalanceUpdate(user.balance - cartTotal);
+    }
+
     setCart([]);
-    
-    // Show receipt modal
     setReceiptData(receipt);
     setIsReceiptOpen(true);
-  };
+  } catch (err) {
+    setCheckoutError(
+      err instanceof Error ? err.message : "Terjadi kesalahan saat checkout."
+    );
+  } finally {
+    setIsCheckingOut(false);
+  }
+};
 
-  const categories = ["all", "mie", "dimsum", "minuman", "topping"] as const;
+const handleLogout = () => {
+  logout();
+  onLogout();
+};
 
-  return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-card/95 backdrop-blur-sm border-b border-border">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between gap-4">
-            {/* Logo & User Info */}
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Flame className="w-5 h-5 text-primary" />
-                </div>
-                <div className="hidden sm:block">
-                  <h1 className="font-bold text-foreground">Mie Gacoan</h1>
-                  <p className="text-xs text-muted-foreground">Kiosk System</p>
-                </div>
+const categories = ["all", "mie", "dimsum", "minuman", "topping"] as const;
+
+return (
+  <div className="min-h-screen bg-background flex flex-col">
+    {/* Header */}
+    <header className="sticky top-0 z-50 bg-card/95 backdrop-blur-sm border-b border-border">
+      <div className="container mx-auto px-4 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <Flame className="w-5 h-5 text-primary" />
               </div>
-              <Separator orientation="vertical" className="h-8 hidden sm:block" />
               <div className="hidden sm:block">
-                <p className="text-sm font-medium text-foreground">{user.name}</p>
-                <Badge variant="secondary" className="text-xs bg-secondary text-secondary-foreground">
-                  PEMBELI
-                </Badge>
+                <h1 className="font-bold text-foreground">Mie Gacoan</h1>
+                <p className="text-xs text-muted-foreground">Kiosk System</p>
               </div>
             </div>
-
-            {/* Balance Card */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-primary/10 px-4 py-2 rounded-lg border border-primary/20">
-                <Wallet className="w-4 h-4 text-primary" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Sisa Saldo</p>
-                  <p className="font-bold text-primary">{formatCurrency(user.balance)}</p>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onLogout}
-                className="text-muted-foreground hover:text-foreground hover:bg-secondary"
+            <Separator orientation="vertical" className="h-8 hidden sm:block" />
+            <div className="hidden sm:block">
+              <p className="text-sm font-medium text-foreground">
+                {user.name}
+              </p>
+              <Badge
+                variant="secondary"
+                className="text-xs bg-secondary text-secondary-foreground"
               >
-                <LogOut className="w-5 h-5" />
-              </Button>
+                PEMBELI
+              </Badge>
             </div>
           </div>
 
-          {/* Search & Categories */}
-          <div className="mt-4 space-y-3 w-full max-w-full min-w-0 overflow-hidden">
-            <div className="relative w-full max-w-full min-w-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-              <Input
-                placeholder="Cari menu..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 w-full max-w-full bg-secondary border-border text-foreground placeholder:text-muted-foreground min-w-0"
-              />
+          {/* Balance Card */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-primary/10 px-4 py-2 rounded-lg border border-primary/20">
+              <Wallet className="w-4 h-4 text-primary" />
+              <div>
+                <p className="text-xs text-muted-foreground">Sisa Saldo</p>
+                <p className="font-bold text-primary">
+                  {formatCurrency(user.balance)}
+                </p>
+              </div>
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-1 w-full max-w-full flex-nowrap whitespace-nowrap scrollbar-none touch-pan-x select-none">
-              {categories.map((cat) => {
-                const Icon = cat === "all" ? UtensilsCrossed : categoryIcons[cat as keyof typeof categoryIcons];
-                return (
-                  <Button
-                    key={cat}
-                    variant={activeCategory === cat ? "default" : "secondary"}
-                    size="sm"
-                    onClick={() => setActiveCategory(cat)}
-                    className={
-                      activeCategory === cat
-                        ? "bg-primary text-primary-foreground hover:bg-primary/90 shrink-0 transition-colors"
-                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80 shrink-0 transition-colors"
-                    }
-                  >
-                    <Icon className="w-4 h-4 mr-1 shrink-0" />
-                    {cat === "all" ? "Semua" : categoryLabels[cat as keyof typeof categoryLabels]}
-                  </Button>
-                );
-              })}
-            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleLogout}
+              className="text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <LogOut className="w-5 h-5" />
+            </Button>
           </div>
         </div>
-      </header>
 
-      {/* Main Content */}
-      <main className="flex-1 container mx-auto px-4 py-6 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 min-w-0 max-w-full">
-        {/* Product Area */}
-        <section className="product-area min-w-0 flex flex-col gap-6 w-full pb-20 md:pb-4">
-          {menuError && (
-            <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-              {menuError}
-            </div>
-          )}
+        {/* Search & Categories */}
+        <div className="mt-4 space-y-3 w-full max-w-full min-w-0 overflow-hidden">
+          <div className="relative w-full max-w-full min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Cari menu..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 w-full max-w-full bg-secondary border-border text-foreground placeholder:text-muted-foreground min-w-0"
+            />
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 w-full max-w-full flex-nowrap whitespace-nowrap scrollbar-none touch-pan-x select-none">
+            {categories.map((cat) => {
+              const Icon =
+                cat === "all"
+                  ? UtensilsCrossed
+                  : categoryIcons[cat as keyof typeof categoryIcons];
+              return (
+                <Button
+                  key={cat}
+                  variant={activeCategory === cat ? "default" : "secondary"}
+                  size="sm"
+                  onClick={() => setActiveCategory(cat)}
+                  className={
+                    activeCategory === cat
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90 shrink-0 transition-colors"
+                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80 shrink-0 transition-colors"
+                  }
+                >
+                  <Icon className="w-4 h-4 mr-1 shrink-0" />
+                  {cat === "all"
+                    ? "Semua"
+                    : categoryLabels[cat as keyof typeof categoryLabels]}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </header>
 
-          {isMenuLoading ? (
-            <div className="text-center py-12 bg-card rounded-xl border border-border">
-              <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4 animate-pulse" />
-              <p className="text-muted-foreground font-medium">Memuat menu dari backend...</p>
-            </div>
-          ) : (
+    {/* Main Content */}
+    <main className="flex-1 container mx-auto px-4 py-6 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 min-w-0 max-w-full">
+      {/* Product Area */}
+      <section className="product-area min-w-0 flex flex-col gap-6 w-full pb-20 md:pb-4">
+        {menuError && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+            {menuError}
+          </div>
+        )}
+
+        {isMenuLoading ? (
+          <div className="text-center py-12 bg-card rounded-xl border border-border">
+            <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4 animate-pulse" />
+            <p className="text-muted-foreground font-medium">Memuat menu dari backend...</p>
+          </div>
+        ) : (
           <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
             {filteredMenu.map((item) => (
-              <MenuCard 
-                key={item.id} 
-                item={item} 
+              <MenuCard
+                key={item.id}
+                item={item}
                 onAdd={addToCart}
                 inCart={cart.find((c) => c.id === item.id)?.quantity || 0}
               />
             ))}
           </div>
-          )}
-          
-          {!isMenuLoading && filteredMenu.length === 0 && (
-            <div className="text-center py-12 bg-card rounded-xl border border-border">
-              <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-muted-foreground font-medium">Menu tidak ditemukan</p>
-            </div>
-          )}
-        </section>
+        )}
 
-        {/* Cart Sidebar - Desktop & Tablet */}
-        <aside className="cart-area min-w-0 hidden md:block xl:sticky xl:top-[100px] xl:h-[calc(100vh-130px)]">
-          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden h-full flex flex-col">
-            <CartSidebar
-              cart={cart}
-              total={cartTotal}
-              userBalance={user.balance}
-              onUpdateQuantity={updateQuantity}
-              onRemove={removeFromCart}
-              onCheckout={handleCheckout}
-            />
+        {!isMenuLoading && filteredMenu.length === 0 && (
+          <div className="text-center py-12 bg-card rounded-xl border border-border">
+            <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+            <p className="text-muted-foreground font-medium">
+              {searchQuery || activeCategory !== "all"
+                ? "Menu tidak ditemukan."
+                : "Belum ada menu tersedia."}
+            </p>
           </div>
-        </aside>
-      </main>
+        ) : (
+        <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
+          {filteredMenu.map((item) => (
+            <MenuCard
+              key={item.id}
+              item={item}
+              onAdd={addToCart}
+              inCart={cart.find((c) => c.id === item.id)?.quantity || 0}
+            />
+          ))}
+        </div>
+          )}
+      </section>
 
-      {/* Cart Button & Drawer - Mobile */}
-      <div className="md:hidden fixed bottom-4 left-4 right-4 z-50">
-        <MobileCartButton
-          itemCount={cartItemCount}
-          total={cartTotal}
-          cart={cart}
-          userBalance={user.balance}
-          onUpdateQuantity={updateQuantity}
-          onRemove={removeFromCart}
-          onCheckout={handleCheckout}
-        />
-      </div>
+      {/* Cart Sidebar - Desktop */}
+      <aside className="cart-area min-w-0 hidden md:block xl:sticky xl:top-[100px] xl:h-[calc(100vh-130px)]">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden h-full flex flex-col">
+          <CartSidebar
+            cart={cart}
+            total={cartTotal}
+            userBalance={user.balance}
+            onUpdateQuantity={updateQuantity}
+            onRemove={removeFromCart}
+            onCheckout={handleCheckout}
+            isCheckingOut={isCheckingOut}
+            checkoutError={checkoutError}
+          />
+        </div>
+      </aside>
+    </main>
 
-      {/* Receipt Modal */}
-      <ReceiptModal
-        isOpen={isReceiptOpen}
-        onClose={() => setIsReceiptOpen(false)}
-        receiptData={receiptData}
+    {/* Cart Button & Drawer - Mobile */}
+    <div className="md:hidden fixed bottom-4 left-4 right-4 z-50">
+      <MobileCartButton
+        itemCount={cartItemCount}
+        total={cartTotal}
+        cart={cart}
+        userBalance={user.balance}
+        onUpdateQuantity={updateQuantity}
+        onRemove={removeFromCart}
+        onCheckout={handleCheckout}
+        isCheckingOut={isCheckingOut}
+        checkoutError={checkoutError}
       />
     </div>
-  );
+
+    {/* Receipt Modal */}
+    <ReceiptModal
+      isOpen={isReceiptOpen}
+      onClose={() => setIsReceiptOpen(false)}
+      receiptData={receiptData}
+    />
+  </div>
+);
 }
 
-// Menu Card Component
-function MenuCard({ 
-  item, 
-  onAdd, 
-  inCart 
-}: { 
-  item: MenuItem; 
+// ─────────────────────────────────────────────────────────────────────────────
+// Menu Card
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MenuCard({
+  item,
+  onAdd,
+  inCart,
+}: {
+  item: MenuItem;
   onAdd: (item: MenuItem) => void;
   inCart: number;
 }) {
   const isOutOfStock = item.stock === 0;
 
   return (
-    <Card className={`h-full flex flex-col justify-between bg-card border-border overflow-hidden transition-all hover:border-primary/50 min-w-0 ${isOutOfStock ? 'opacity-60' : ''}`}>
+    <Card
+      className={`h-full flex flex-col justify-between bg-card border-border overflow-hidden transition-all hover:border-primary/50 min-w-0 ${isOutOfStock ? "opacity-60" : ""
+        }`}
+    >
       <CardContent className="p-3 flex flex-col flex-1 min-w-0">
-        {/* Placeholder Image */}
         <div className="relative aspect-square bg-secondary rounded-lg mb-3 flex items-center justify-center overflow-hidden shrink-0">
           {item.isSpicy && (
             <div className="absolute top-2 left-2 z-10">
@@ -379,14 +488,17 @@ function MenuCard({
               </Badge>
             </div>
           )}
-          <img 
-            src={item.imageUrl || categoryPlaceholders[item.category] || '/placeholder.svg'} 
+          <img
+            src={
+              item.imageUrl ||
+              categoryPlaceholders[item.category] ||
+              "/placeholder.svg"
+            }
             alt={item.name}
             className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
           />
         </div>
 
-        {/* Info */}
         <div className="flex flex-col flex-1 space-y-2 min-w-0">
           <h3 className="font-medium text-foreground text-sm leading-tight line-clamp-2 min-h-[2.5rem] break-words">
             {item.name}
@@ -395,17 +507,16 @@ function MenuCard({
             <p className="font-bold text-primary text-sm whitespace-nowrap shrink-0">
               {formatCurrency(item.price)}
             </p>
-            <Badge 
-              variant="outline" 
-              className={`text-[10px] sm:text-xs truncate max-w-[65px] sm:max-w-none ${
-                item.stock > 10 
-                  ? 'border-success/50 text-success bg-success/5' 
-                  : item.stock > 0 
-                    ? 'border-warning/50 text-warning bg-warning/5' 
-                    : 'border-destructive/50 text-destructive bg-destructive/5'
-              }`}
+            <Badge
+              variant="outline"
+              className={`text-[10px] sm:text-xs truncate max-w-[65px] sm:max-w-none ${item.stock > 10
+                  ? "border-success/50 text-success bg-success/5"
+                  : item.stock > 0
+                    ? "border-warning/50 text-warning bg-warning/5"
+                    : "border-destructive/50 text-destructive bg-destructive/5"
+                }`}
             >
-              {item.stock > 0 ? `${item.stock} pcs` : 'Habis'}
+              {item.stock > 0 ? `${item.stock} pcs` : "Habis"}
             </Badge>
           </div>
           <Button
@@ -423,7 +534,10 @@ function MenuCard({
   );
 }
 
-// Cart Sidebar Component
+// ─────────────────────────────────────────────────────────────────────────────
+// Cart Sidebar
+// ─────────────────────────────────────────────────────────────────────────────
+
 function CartSidebar({
   cart,
   total,
@@ -431,6 +545,8 @@ function CartSidebar({
   onUpdateQuantity,
   onRemove,
   onCheckout,
+  isCheckingOut,
+  checkoutError,
 }: {
   cart: CartItem[];
   total: number;
@@ -438,30 +554,35 @@ function CartSidebar({
   onUpdateQuantity: (id: string, delta: number) => void;
   onRemove: (id: string) => void;
   onCheckout: () => void;
+  isCheckingOut: boolean;
+  checkoutError: string;
 }) {
-  const canCheckout = cart.length > 0 && total <= userBalance;
+  const canCheckout = cart.length > 0 && total <= userBalance && !isCheckingOut;
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center gap-2">
           <ShoppingCart className="w-5 h-5 text-primary" />
           <h2 className="font-bold text-foreground">Keranjang</h2>
-          <Badge variant="secondary" className="ml-auto bg-secondary text-secondary-foreground">
+          <Badge
+            variant="secondary"
+            className="ml-auto bg-secondary text-secondary-foreground"
+          >
             {cart.length} item
           </Badge>
         </div>
       </div>
 
-      {/* Cart Items */}
       <ScrollArea className="flex-1 min-h-[220px] max-h-[380px] xl:max-h-none">
         <div className="p-4 space-y-3">
           {cart.length === 0 ? (
             <div className="text-center py-8">
               <ShoppingCart className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
               <p className="text-muted-foreground text-sm">Keranjang kosong</p>
-              <p className="text-muted-foreground text-xs">Tambahkan menu untuk memulai</p>
+              <p className="text-muted-foreground text-xs">
+                Tambahkan menu untuk memulai
+              </p>
             </div>
           ) : (
             cart.map((item) => (
@@ -470,8 +591,12 @@ function CartSidebar({
                 className="flex gap-3 p-3 bg-secondary rounded-lg min-w-0"
               >
                 <div className="w-12 h-12 bg-muted rounded-lg flex items-center justify-center overflow-hidden shrink-0">
-                  <img 
-                    src={item.imageUrl || categoryPlaceholders[item.category] || '/placeholder.svg'} 
+                  <img
+                    src={
+                      item.imageUrl ||
+                      categoryPlaceholders[item.category] ||
+                      "/placeholder.svg"
+                    }
                     alt={item.name}
                     className="w-full h-full object-cover"
                   />
@@ -520,15 +645,21 @@ function CartSidebar({
         </div>
       </ScrollArea>
 
-      {/* Checkout */}
       <div className="p-4 border-t border-border space-y-3">
         <div className="flex justify-between items-center">
           <span className="text-muted-foreground">Total</span>
-          <span className="text-xl font-bold text-foreground">{formatCurrency(total)}</span>
+          <span className="text-xl font-bold text-foreground">
+            {formatCurrency(total)}
+          </span>
         </div>
         {total > userBalance && (
           <p className="text-destructive text-xs text-center">
             Saldo tidak mencukupi. Kurang {formatCurrency(total - userBalance)}
+          </p>
+        )}
+        {checkoutError && (
+          <p className="text-destructive text-xs text-center bg-destructive/10 p-2 rounded-lg">
+            {checkoutError}
           </p>
         )}
         <Button
@@ -537,14 +668,24 @@ function CartSidebar({
           disabled={!canCheckout}
           onClick={onCheckout}
         >
-          Order Sekarang
+          {isCheckingOut ? (
+            <>
+              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              Memproses...
+            </>
+          ) : (
+            "Order Sekarang"
+          )}
         </Button>
       </div>
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Mobile Cart Button
+// ─────────────────────────────────────────────────────────────────────────────
+
 function MobileCartButton({
   itemCount,
   total,
@@ -553,6 +694,8 @@ function MobileCartButton({
   onUpdateQuantity,
   onRemove,
   onCheckout,
+  isCheckingOut,
+  checkoutError,
 }: {
   itemCount: number;
   total: number;
@@ -561,6 +704,8 @@ function MobileCartButton({
   onUpdateQuantity: (id: string, delta: number) => void;
   onRemove: (id: string) => void;
   onCheckout: () => void;
+  isCheckingOut: boolean;
+  checkoutError: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -572,14 +717,15 @@ function MobileCartButton({
       >
         <ShoppingCart className="w-5 h-5 mr-2" />
         <span>Lihat Keranjang</span>
-        <Badge className="ml-2 bg-primary-foreground text-primary">{itemCount}</Badge>
+        <Badge className="ml-2 bg-primary-foreground text-primary">
+          {itemCount}
+        </Badge>
         <span className="ml-auto">{formatCurrency(total)}</span>
       </Button>
 
-      {/* Mobile Cart Sheet */}
       {isOpen && (
         <div className="fixed inset-0 z-50">
-          <div 
+          <div
             className="absolute inset-0 bg-background/80 backdrop-blur-sm"
             onClick={() => setIsOpen(false)}
           />
@@ -604,13 +750,17 @@ function MobileCartButton({
                     key={item.id}
                     className="flex gap-3 p-3 bg-secondary rounded-lg"
                   >
-                  <div className="w-12 h-12 bg-muted rounded-lg flex items-center justify-center overflow-hidden shrink-0">
-                    <img 
-                      src={item.imageUrl || categoryPlaceholders[item.category] || '/placeholder.svg'} 
-                      alt={item.name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
+                    <div className="w-12 h-12 bg-muted rounded-lg flex items-center justify-center overflow-hidden shrink-0">
+                      <img
+                        src={
+                          item.imageUrl ||
+                          categoryPlaceholders[item.category] ||
+                          "/placeholder.svg"
+                        }
+                        alt={item.name}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
                     <div className="flex-1 min-w-0">
                       <h4 className="font-medium text-foreground text-sm truncate">
                         {item.name}
@@ -655,23 +805,37 @@ function MobileCartButton({
             <div className="p-4 border-t border-border space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Total</span>
-                <span className="text-xl font-bold text-foreground">{formatCurrency(total)}</span>
+                <span className="text-xl font-bold text-foreground">
+                  {formatCurrency(total)}
+                </span>
               </div>
               {total > userBalance && (
                 <p className="text-destructive text-xs text-center">
                   Saldo tidak mencukupi
                 </p>
               )}
+              {checkoutError && (
+                <p className="text-destructive text-xs text-center bg-destructive/10 p-2 rounded-lg">
+                  {checkoutError}
+                </p>
+              )}
               <Button
                 className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
                 size="lg"
-                disabled={cart.length === 0 || total > userBalance}
+                disabled={cart.length === 0 || total > userBalance || isCheckingOut}
                 onClick={() => {
                   onCheckout();
-                  setIsOpen(false);
+                  if (!checkoutError) setIsOpen(false);
                 }}
               >
-                Order Sekarang
+                {isCheckingOut ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                    Memproses...
+                  </>
+                ) : (
+                  "Order Sekarang"
+                )}
               </Button>
             </div>
           </div>
@@ -681,7 +845,10 @@ function MobileCartButton({
   );
 }
 
-// Receipt Modal Component
+// ─────────────────────────────────────────────────────────────────────────────
+// Receipt Modal
+// ─────────────────────────────────────────────────────────────────────────────
+
 interface ReceiptModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -702,21 +869,28 @@ function ReceiptModal({ isOpen, onClose, receiptData }: ReceiptModalProps) {
           <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-2">
             <Flame className="w-6 h-6 text-primary animate-pulse" />
           </div>
-          <DialogTitle className="text-xl font-bold text-foreground">Transaksi Berhasil!</DialogTitle>
-          <p className="text-xs text-muted-foreground">Terima kasih atas pesanan Anda</p>
+          <DialogTitle className="text-xl font-bold text-foreground">
+            Transaksi Berhasil!
+          </DialogTitle>
+          <p className="text-xs text-muted-foreground">
+            Terima kasih atas pesanan Anda
+          </p>
         </DialogHeader>
 
-        {/* Receipt content structured like a classic print receipt */}
         <div className="bg-secondary/40 rounded-xl p-4 my-2 border border-border/50 text-xs font-mono space-y-3">
           <div className="text-center border-b border-dashed border-border pb-2 space-y-1">
-            <h3 className="font-bold text-sm text-foreground">MIE GACOAN KIOSK</h3>
+            <h3 className="font-bold text-sm text-foreground">
+              MIE GACOAN KIOSK
+            </h3>
             <p className="text-muted-foreground">Kota Malang, Jawa Timur</p>
           </div>
 
           <div className="space-y-1">
             <div className="flex justify-between">
               <span className="text-muted-foreground">No. Transaksi:</span>
-              <span className="font-semibold text-foreground">{receiptData.transactionId}</span>
+              <span className="font-semibold text-foreground">
+                {receiptData.transactionId}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Tanggal:</span>
@@ -735,10 +909,12 @@ function ReceiptModal({ isOpen, onClose, receiptData }: ReceiptModalProps) {
 
           <Separator className="border-dashed border-border bg-transparent" />
 
-          {/* Items */}
           <div className="space-y-2 py-1">
             {receiptData.items.map((item) => (
-              <div key={item.id} className="flex justify-between items-start gap-4">
+              <div
+                key={item.id}
+                className="flex justify-between items-start gap-4"
+              >
                 <div className="flex-1">
                   <p className="text-foreground font-medium">{item.name}</p>
                   <p className="text-muted-foreground text-[10px]">
@@ -754,17 +930,18 @@ function ReceiptModal({ isOpen, onClose, receiptData }: ReceiptModalProps) {
 
           <Separator className="border-dashed border-border bg-transparent" />
 
-          {/* Total */}
           <div className="flex justify-between items-center text-sm pt-1">
             <span className="font-bold text-foreground">TOTAL BELANJA</span>
             <span className="font-extrabold text-primary text-base">
               {formatCurrency(receiptData.total)}
             </span>
           </div>
-          
+
           <div className="text-center text-[10px] text-muted-foreground pt-2 border-t border-dashed border-border">
             <p>Metode Pembayaran: Saldo Kiosk</p>
-            <p className="mt-1">Silakan tunjukkan struk ini ke bagian pengambilan makanan.</p>
+            <p className="mt-1">
+              Silakan tunjukkan struk ini ke bagian pengambilan makanan.
+            </p>
           </div>
         </div>
 

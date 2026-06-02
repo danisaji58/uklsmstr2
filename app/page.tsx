@@ -66,7 +66,6 @@ export default function Home() {
     return <LoginPage onLogin={handleLogin} />;
   }
 
-  // Show appropriate dashboard based on user role
   if (currentUser.role === "kasir") {
     return <KasirDashboard user={currentUser} onLogout={handleLogout} />;
   }

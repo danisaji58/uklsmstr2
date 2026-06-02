@@ -46,11 +46,13 @@ import {
   DollarSign,
   TrendingUp,
   AlertTriangle,
+  RefreshCw,
+  ServerCrash,
 } from "lucide-react";
-import { 
-  type User, 
-  type MenuItem, 
-  formatCurrency 
+import {
+  type User,
+  type MenuItem,
+  formatCurrency
 } from "@/lib/data";
 import { createMenu, deleteMenu, getMenus, getUsers, topUpUser, updateMenu } from "@/lib/api";
 
@@ -59,29 +61,78 @@ interface KasirDashboardProps {
   onLogout: () => void;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Reusable loading / error / empty components
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LoadingSpinner({ label = "Memuat data..." }: { label?: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 gap-3">
+      <RefreshCw className="w-8 h-8 text-primary animate-spin" />
+      <p className="text-muted-foreground text-sm">{label}</p>
+    </div>
+  );
+}
+
+function ErrorState({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 gap-4">
+      <ServerCrash className="w-12 h-12 text-destructive opacity-60" />
+      <div className="text-center">
+        <p className="text-foreground font-medium">Gagal memuat data</p>
+        <p className="text-muted-foreground text-sm mt-1">{message}</p>
+      </div>
+      <Button variant="outline" onClick={onRetry} className="gap-2">
+        <RefreshCw className="w-4 h-4" />
+        Coba Lagi
+      </Button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Dashboard
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
   const [activeTab, setActiveTab] = useState<"menu" | "topup">("menu");
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
-  
+
   const [searchQuery, setSearchQuery] = useState("");
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isDeleteMenuOpen, setIsDeleteMenuOpen] = useState(false);
-  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(null);
-  
-  // Top up state
+  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(
+    null
+  );
+
+  // ── CRUD loading state ────────────────────────────────────────────────────
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  // ── Top up state ─────────────────────────────────────────────────────────────
   const [selectedUserId, setSelectedUserId] = useState("");
   const [topUpAmount, setTopUpAmount] = useState("");
+  const [topUpLoading, setTopUpLoading] = useState(false);
   const [topUpSuccess, setTopUpSuccess] = useState(false);
+  const [topUpError, setTopUpError] = useState("");
 
-  // Add/Edit menu state
+  // ── Form state ───────────────────────────────────────────────────────────────
   const [newMenuName, setNewMenuName] = useState("");
   const [newMenuPrice, setNewMenuPrice] = useState("");
   const [newMenuStock, setNewMenuStock] = useState("");
-  const [newMenuCategory, setNewMenuCategory] = useState<"mie" | "dimsum" | "minuman" | "topping">("mie");
+  const [newMenuCategory, setNewMenuCategory] = useState<
+    "mie" | "dimsum" | "minuman" | "topping"
+  >("mie");
   const [newMenuImageUrl, setNewMenuImageUrl] = useState("");
 
   useEffect(() => {
@@ -123,7 +174,7 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
   const stats = useMemo(() => {
     return {
       totalMenu: menuItems.length,
-      lowStock: menuItems.filter(m => m.stock < 20).length,
+      lowStock: menuItems.filter((m) => m.stock < 20).length,
       totalUsers: users.length,
       totalBalance: users.reduce((sum, u) => sum + u.balance, 0),
     };
@@ -186,6 +237,7 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
     setNewMenuStock("");
     setNewMenuCategory("mie");
     setNewMenuImageUrl("");
+    setSaveError("");
   };
 
   const openEditDialog = (item: MenuItem) => {
@@ -193,6 +245,7 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
     setNewMenuPrice(item.price.toString());
     setNewMenuStock(item.stock.toString());
     setNewMenuImageUrl(item.imageUrl || "");
+    setSaveError("");
     setIsEditMenuOpen(true);
   };
 
@@ -221,6 +274,15 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
     }
   };
 
+  const handleLogout = () => {
+    logout();
+    onLogout();
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-background flex flex-col lg:flex-row">
       {/* Mobile Header */}
@@ -230,12 +292,13 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
             <Flame className="w-4 h-4 text-sidebar-primary" />
           </div>
           <div>
-            <h1 className="font-bold text-sm text-sidebar-foreground">Mie Gacoan</h1>
+            <h1 className="font-bold text-sm text-sidebar-foreground">
+              Mie Gacoan
+            </h1>
             <p className="text-[10px] text-muted-foreground">Kasir System</p>
           </div>
         </div>
 
-        {/* Tab Navigation */}
         <div className="flex items-center gap-1.5">
           <Button
             variant={activeTab === "menu" ? "secondary" : "ghost"}
@@ -259,7 +322,7 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
           <Button
             variant="ghost"
             size="icon"
-            onClick={onLogout}
+            onClick={handleLogout}
             className="h-8 w-8 text-muted-foreground hover:text-sidebar-foreground shrink-0"
           >
             <LogOut className="w-4 h-4" />
@@ -269,7 +332,6 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
 
       {/* Sidebar - Desktop */}
       <aside className="hidden lg:flex w-64 bg-sidebar border-r border-sidebar-border flex-col shrink-0">
-        {/* Logo */}
         <div className="p-4 border-b border-sidebar-border">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-sidebar-primary/10 flex items-center justify-center">
@@ -282,15 +344,13 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
           </div>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
           <Button
             variant={activeTab === "menu" ? "secondary" : "ghost"}
-            className={`w-full justify-start ${
-              activeTab === "menu" 
-                ? "bg-sidebar-accent text-sidebar-accent-foreground" 
-                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            }`}
+            className={`w-full justify-start ${activeTab === "menu"
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              }`}
             onClick={() => setActiveTab("menu")}
           >
             <UtensilsCrossed className="w-4 h-4 mr-3" />
@@ -298,11 +358,10 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
           </Button>
           <Button
             variant={activeTab === "topup" ? "secondary" : "ghost"}
-            className={`w-full justify-start ${
-              activeTab === "topup" 
-                ? "bg-sidebar-accent text-sidebar-accent-foreground" 
-                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            }`}
+            className={`w-full justify-start ${activeTab === "topup"
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              }`}
             onClick={() => setActiveTab("topup")}
           >
             <Wallet className="w-4 h-4 mr-3" />
@@ -310,7 +369,6 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
           </Button>
         </nav>
 
-        {/* User Info */}
         <div className="p-4 border-t border-sidebar-border">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-sidebar-accent flex items-center justify-center">
@@ -329,7 +387,7 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
             <Button
               variant="ghost"
               size="icon"
-              onClick={onLogout}
+              onClick={handleLogout}
               className="text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent"
             >
               <LogOut className="w-4 h-4" />
@@ -350,6 +408,9 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
         ) : activeTab === "menu" ? (
           <MenuManagement
             menuItems={filteredMenu}
+            menuLoading={menuLoading}
+            menuError={menuError}
+            onRetryMenu={fetchMenus}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             stats={stats}
@@ -375,16 +436,23 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
             handleDeleteMenu={handleDeleteMenu}
             openEditDialog={openEditDialog}
             openDeleteDialog={openDeleteDialog}
+            isSaving={isSaving}
+            saveError={saveError}
           />
         ) : (
           <TopUpSection
             users={users}
+            usersLoading={usersLoading}
+            usersError={usersError}
+            onRetryUsers={fetchUsers}
             selectedUserId={selectedUserId}
             setSelectedUserId={setSelectedUserId}
             topUpAmount={topUpAmount}
             setTopUpAmount={setTopUpAmount}
             handleTopUp={handleTopUp}
+            topUpLoading={topUpLoading}
             topUpSuccess={topUpSuccess}
+            topUpError={topUpError}
           />
         )}
       </main>
@@ -392,9 +460,15 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Menu Management Component
+// ─────────────────────────────────────────────────────────────────────────────
+
 function MenuManagement({
   menuItems,
+  menuLoading,
+  menuError,
+  onRetryMenu,
   searchQuery,
   setSearchQuery,
   stats,
@@ -420,11 +494,21 @@ function MenuManagement({
   handleDeleteMenu,
   openEditDialog,
   openDeleteDialog,
+  isSaving,
+  saveError,
 }: {
   menuItems: MenuItem[];
+  menuLoading: boolean;
+  menuError: string;
+  onRetryMenu: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
-  stats: { totalMenu: number; lowStock: number; totalUsers: number; totalBalance: number };
+  stats: {
+    totalMenu: number;
+    lowStock: number;
+    totalUsers: number;
+    totalBalance: number;
+  };
   isAddMenuOpen: boolean;
   setIsAddMenuOpen: (open: boolean) => void;
   isEditMenuOpen: boolean;
@@ -447,6 +531,8 @@ function MenuManagement({
   handleDeleteMenu: () => void;
   openEditDialog: (item: MenuItem) => void;
   openDeleteDialog: (item: MenuItem) => void;
+  isSaving: boolean;
+  saveError: string;
 }) {
   return (
     <div className="p-6 space-y-6">
@@ -454,7 +540,9 @@ function MenuManagement({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Kelola Menu</h1>
-          <p className="text-muted-foreground">Tambah, edit, dan kelola stok menu restoran</p>
+          <p className="text-muted-foreground">
+            Tambah, edit, dan kelola stok menu restoran
+          </p>
         </div>
         <Dialog open={isAddMenuOpen} onOpenChange={setIsAddMenuOpen}>
           <DialogTrigger asChild>
@@ -465,14 +553,18 @@ function MenuManagement({
           </DialogTrigger>
           <DialogContent className="bg-card border-border">
             <DialogHeader>
-              <DialogTitle className="text-foreground">Tambah Menu Baru</DialogTitle>
+              <DialogTitle className="text-foreground">
+                Tambah Menu Baru
+              </DialogTitle>
               <DialogDescription className="text-muted-foreground">
                 Isi form di bawah untuk menambahkan menu baru
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="name" className="text-foreground">Nama Menu</Label>
+                <Label htmlFor="name" className="text-foreground">
+                  Nama Menu
+                </Label>
                 <Input
                   id="name"
                   placeholder="Masukkan nama menu"
@@ -483,7 +575,9 @@ function MenuManagement({
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="price" className="text-foreground">Harga</Label>
+                  <Label htmlFor="price" className="text-foreground">
+                    Harga
+                  </Label>
                   <Input
                     id="price"
                     type="number"
@@ -494,7 +588,9 @@ function MenuManagement({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="stock" className="text-foreground">Stok</Label>
+                  <Label htmlFor="stock" className="text-foreground">
+                    Stok
+                  </Label>
                   <Input
                     id="stock"
                     type="number"
@@ -505,37 +601,29 @@ function MenuManagement({
                   />
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="category" className="text-foreground">Kategori</Label>
-                <Select value={newMenuCategory} onValueChange={(v) => setNewMenuCategory(v as typeof newMenuCategory)}>
-                  <SelectTrigger className="bg-secondary border-border text-foreground">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                    <SelectItem value="mie">Mie</SelectItem>
-                    <SelectItem value="dimsum">Dimsum</SelectItem>
-                    <SelectItem value="minuman">Minuman</SelectItem>
-                    <SelectItem value="topping">Topping</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="imageUrl" className="text-foreground">URL Gambar</Label>
-                <Input
-                  id="imageUrl"
-                  type="url"
-                  placeholder="https://example.com/image.jpg"
-                  value={newMenuImageUrl}
-                  onChange={(e) => setNewMenuImageUrl(e.target.value)}
-                  className="bg-secondary border-border text-foreground"
-                />
-              </div>
+              {saveError && (
+                <p className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+                  {saveError}
+                </p>
+              )}
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setIsAddMenuOpen(false)} className="border-border text-foreground">
+              <Button
+                variant="outline"
+                onClick={() => setIsAddMenuOpen(false)}
+                className="border-border text-foreground"
+                disabled={isSaving}
+              >
                 Batal
               </Button>
-              <Button onClick={handleAddMenu} className="bg-primary text-primary-foreground hover:bg-primary/90">
+              <Button
+                onClick={handleAddMenu}
+                className="bg-primary text-primary-foreground hover:bg-primary/90"
+                disabled={isSaving}
+              >
+                {isSaving ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : null}
                 Tambah
               </Button>
             </DialogFooter>
@@ -553,7 +641,13 @@ function MenuManagement({
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total Menu</p>
-                <p className="text-2xl font-bold text-foreground">{stats.totalMenu}</p>
+                <p className="text-2xl font-bold text-foreground">
+                  {menuLoading ? (
+                    <span className="animate-pulse">...</span>
+                  ) : (
+                    stats.totalMenu
+                  )}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -566,7 +660,13 @@ function MenuManagement({
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Stok Rendah</p>
-                <p className="text-2xl font-bold text-foreground">{stats.lowStock}</p>
+                <p className="text-2xl font-bold text-foreground">
+                  {menuLoading ? (
+                    <span className="animate-pulse">...</span>
+                  ) : (
+                    stats.lowStock
+                  )}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -578,8 +678,12 @@ function MenuManagement({
                 <Users className="w-5 h-5 text-success" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Total Pelanggan</p>
-                <p className="text-2xl font-bold text-foreground">{stats.totalUsers}</p>
+                <p className="text-sm text-muted-foreground">
+                  Total Pelanggan
+                </p>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats.totalUsers}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -592,7 +696,9 @@ function MenuManagement({
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total Saldo</p>
-                <p className="text-lg font-bold text-foreground">{formatCurrency(stats.totalBalance)}</p>
+                <p className="text-lg font-bold text-foreground">
+                  {formatCurrency(stats.totalBalance)}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -612,79 +718,102 @@ function MenuManagement({
 
       {/* Table */}
       <Card className="bg-card border-border overflow-hidden">
-        <ScrollArea className="h-[500px] w-full">
-          <Table className="min-w-[650px] md:min-w-full">
-            <TableHeader>
-              <TableRow className="border-border hover:bg-transparent">
-                <TableHead className="text-muted-foreground">Nama Menu</TableHead>
-                <TableHead className="text-muted-foreground">Kategori</TableHead>
-                <TableHead className="text-muted-foreground text-right">Harga</TableHead>
-                <TableHead className="text-muted-foreground text-right">Stok</TableHead>
-                <TableHead className="text-muted-foreground text-right">Aksi</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {menuItems.map((item) => (
-                <TableRow key={item.id} className="border-border">
-                  <TableCell className="font-medium text-foreground">
-                    <div className="flex items-center gap-2">
-                      {item.name}
-                      {item.isSpicy && (
-                        <Badge className="bg-destructive/20 text-destructive text-xs">
-                          <Flame className="w-3 h-3 mr-1" />
-                          Lv.{item.spicyLevel}
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="border-border text-muted-foreground capitalize">
-                      {item.category}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right text-foreground">
-                    {formatCurrency(item.price)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Badge
-                      variant="outline"
-                      className={
-                        item.stock > 20
-                          ? "border-success/50 text-success"
-                          : item.stock > 0
-                          ? "border-warning/50 text-warning"
-                          : "border-destructive/50 text-destructive"
-                      }
-                    >
-                      {item.stock} pcs
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEditDialog(item)}
-                        className="text-muted-foreground hover:text-foreground hover:bg-secondary"
-                      >
-                        <Pencil className="w-4 h-4 mr-1" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openDeleteDialog(item)}
-                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
+        {menuLoading ? (
+          <LoadingSpinner label="Memuat daftar menu..." />
+        ) : menuError ? (
+          <ErrorState message={menuError} onRetry={onRetryMenu} />
+        ) : menuItems.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <Package className="w-12 h-12 text-muted-foreground opacity-40" />
+            <p className="text-muted-foreground">
+              {searchQuery ? "Tidak ada menu yang cocok." : "Belum ada menu."}
+            </p>
+          </div>
+        ) : (
+          <ScrollArea className="h-[500px] w-full">
+            <Table className="min-w-[650px] md:min-w-full">
+              <TableHeader>
+                <TableRow className="border-border hover:bg-transparent">
+                  <TableHead className="text-muted-foreground">
+                    Nama Menu
+                  </TableHead>
+                  <TableHead className="text-muted-foreground text-right">
+                    Harga
+                  </TableHead>
+                  <TableHead className="text-muted-foreground text-right">
+                    Stok
+                  </TableHead>
+                  <TableHead className="text-muted-foreground text-right">
+                    Aksi
+                  </TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </ScrollArea>
+              </TableHeader>
+              <TableBody>
+                {menuItems.map((item) => (
+                  <TableRow key={item.id} className="border-border">
+                    <TableCell className="font-medium text-foreground">
+                      <div className="flex items-center gap-2">
+                        {item.name}
+                        {item.isSpicy && (
+                          <Badge className="bg-destructive/20 text-destructive text-xs">
+                            <Flame className="w-3 h-3 mr-1" />
+                            Lv.{item.spicyLevel}
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className="border-border text-muted-foreground capitalize"
+                      >
+                        {item.category}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right text-foreground">
+                      {formatCurrency(item.price)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Badge
+                        variant="outline"
+                        className={
+                          item.stock > 20
+                            ? "border-success/50 text-success"
+                            : item.stock > 0
+                              ? "border-warning/50 text-warning"
+                              : "border-destructive/50 text-destructive"
+                        }
+                      >
+                        {item.stock} pcs
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEditDialog(item)}
+                          className="text-muted-foreground hover:text-foreground hover:bg-secondary"
+                        >
+                          <Pencil className="w-4 h-4 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openDeleteDialog(item)}
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </ScrollArea>
+        )}
       </Card>
 
       {/* Edit Dialog */}
@@ -698,7 +827,9 @@ function MenuManagement({
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="edit-price" className="text-foreground">Harga</Label>
+              <Label htmlFor="edit-price" className="text-foreground">
+                Harga
+              </Label>
               <Input
                 id="edit-price"
                 type="number"
@@ -708,7 +839,9 @@ function MenuManagement({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-stock" className="text-foreground">Stok</Label>
+              <Label htmlFor="edit-stock" className="text-foreground">
+                Stok
+              </Label>
               <Input
                 id="edit-stock"
                 type="number"
@@ -718,7 +851,9 @@ function MenuManagement({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-imageUrl" className="text-foreground">URL Gambar</Label>
+              <Label htmlFor="edit-imageUrl" className="text-foreground">
+                URL Gambar
+              </Label>
               <Input
                 id="edit-imageUrl"
                 type="url"
@@ -728,12 +863,29 @@ function MenuManagement({
                 className="bg-secondary border-border text-foreground"
               />
             </div>
+            {saveError && (
+              <p className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+                {saveError}
+              </p>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditMenuOpen(false)} className="border-border text-foreground">
+            <Button
+              variant="outline"
+              onClick={() => setIsEditMenuOpen(false)}
+              className="border-border text-foreground"
+              disabled={isSaving}
+            >
               Batal
             </Button>
-            <Button onClick={handleEditMenu} className="bg-primary text-primary-foreground hover:bg-primary/90">
+            <Button
+              onClick={handleEditMenu}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              ) : null}
               Simpan
             </Button>
           </DialogFooter>
@@ -749,7 +901,9 @@ function MenuManagement({
                 <AlertTriangle className="w-6 h-6 text-destructive" />
               </div>
               <div>
-                <DialogTitle className="text-foreground">Hapus Menu</DialogTitle>
+                <DialogTitle className="text-foreground">
+                  Hapus Menu
+                </DialogTitle>
                 <DialogDescription className="text-muted-foreground">
                   {selectedMenuItem?.name}
                 </DialogDescription>
@@ -763,13 +917,31 @@ function MenuManagement({
             <p className="text-muted-foreground text-sm text-center mt-2">
               Tindakan ini tidak dapat dibatalkan.
             </p>
+            {saveError && (
+              <p className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg mt-3 text-center">
+                {saveError}
+              </p>
+            )}
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setIsDeleteMenuOpen(false)} className="border-border text-foreground">
+            <Button
+              variant="outline"
+              onClick={() => setIsDeleteMenuOpen(false)}
+              className="border-border text-foreground"
+              disabled={isSaving}
+            >
               Batal
             </Button>
-            <Button onClick={handleDeleteMenu} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              <Trash2 className="w-4 h-4 mr-2" />
+            <Button
+              onClick={handleDeleteMenu}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4 mr-2" />
+              )}
               Hapus
             </Button>
           </DialogFooter>
@@ -779,30 +951,42 @@ function MenuManagement({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Top Up Section Component
+// ─────────────────────────────────────────────────────────────────────────────
+
 function TopUpSection({
   users,
+  usersLoading,
+  usersError,
+  onRetryUsers,
   selectedUserId,
   setSelectedUserId,
   topUpAmount,
   setTopUpAmount,
   handleTopUp,
+  topUpLoading,
   topUpSuccess,
+  topUpError,
 }: {
   users: User[];
+  usersLoading: boolean;
+  usersError: string;
+  onRetryUsers: () => void;
   selectedUserId: string;
   setSelectedUserId: (id: string) => void;
   topUpAmount: string;
   setTopUpAmount: (amount: string) => void;
   handleTopUp: () => void;
+  topUpLoading: boolean;
   topUpSuccess: boolean;
+  topUpError: string;
 }) {
   const selectedUser = users.find((u) => u.id === selectedUserId);
   const quickAmounts = [50000, 100000, 150000, 200000];
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">Top Up Saldo</h1>
         <p className="text-muted-foreground">Tambah saldo untuk pelanggan</p>
@@ -823,22 +1007,49 @@ function TopUpSection({
           <CardContent className="space-y-6">
             {/* User Selection */}
             <div className="space-y-2">
-              <Label htmlFor="user" className="text-foreground">Pilih Pelanggan</Label>
-              <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-                <SelectTrigger className="bg-secondary border-border text-foreground">
-                  <SelectValue placeholder="Pilih pelanggan..." />
-                </SelectTrigger>
-                <SelectContent className="bg-popover border-border">
-                  {users.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      <div className="flex items-center gap-2">
-                        <span>{user.name}</span>
-                        <span className="text-muted-foreground text-xs">({user.email})</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="user" className="text-foreground">
+                Pilih Pelanggan
+              </Label>
+              {usersLoading ? (
+                <div className="flex items-center gap-2 text-muted-foreground text-sm p-3 bg-secondary rounded-lg">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Memuat daftar pelanggan...
+                </div>
+              ) : usersError ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-destructive">{usersError}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onRetryUsers}
+                    className="gap-2 w-fit"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Coba Lagi
+                  </Button>
+                </div>
+              ) : (
+                <Select
+                  value={selectedUserId}
+                  onValueChange={setSelectedUserId}
+                >
+                  <SelectTrigger className="bg-secondary border-border text-foreground">
+                    <SelectValue placeholder="Pilih pelanggan..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-popover border-border">
+                    {users.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        <div className="flex items-center gap-2">
+                          <span>{user.name}</span>
+                          <span className="text-muted-foreground text-xs">
+                            ({user.email})
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             {/* Selected User Info */}
@@ -851,8 +1062,12 @@ function TopUpSection({
                     </span>
                   </div>
                   <div>
-                    <p className="font-medium text-foreground">{selectedUser.name}</p>
-                    <p className="text-sm text-muted-foreground">{selectedUser.email}</p>
+                    <p className="font-medium text-foreground">
+                      {selectedUser.name}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {selectedUser.email}
+                    </p>
                     <p className="text-sm text-primary font-semibold mt-1">
                       Saldo: {formatCurrency(selectedUser.balance)}
                     </p>
@@ -863,7 +1078,9 @@ function TopUpSection({
 
             {/* Amount Input */}
             <div className="space-y-2">
-              <Label htmlFor="amount" className="text-foreground">Nominal Top Up</Label>
+              <Label htmlFor="amount" className="text-foreground">
+                Nominal Top Up
+              </Label>
               <Input
                 id="amount"
                 type="number"
@@ -883,9 +1100,10 @@ function TopUpSection({
                     key={amount}
                     variant="outline"
                     onClick={() => setTopUpAmount(amount.toString())}
-                    className={`border-border text-foreground hover:bg-secondary ${
-                      topUpAmount === amount.toString() ? "bg-primary/10 border-primary" : ""
-                    }`}
+                    className={`border-border text-foreground hover:bg-secondary ${topUpAmount === amount.toString()
+                      ? "bg-primary/10 border-primary"
+                      : ""
+                      }`}
                   >
                     {formatCurrency(amount)}
                   </Button>
@@ -893,14 +1111,34 @@ function TopUpSection({
               </div>
             </div>
 
+            {/* Error */}
+            {topUpError && (
+              <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                {topUpError}
+              </div>
+            )}
+
             {/* Submit */}
             <Button
               className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
               size="lg"
-              disabled={!selectedUserId || !topUpAmount || parseInt(topUpAmount) <= 0}
+              disabled={
+                !selectedUserId ||
+                !topUpAmount ||
+                parseInt(topUpAmount) <= 0 ||
+                topUpLoading
+              }
               onClick={handleTopUp}
             >
-              Proses Top Up
+              {topUpLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Memproses...
+                </>
+              ) : (
+                "Proses Top Up"
+              )}
             </Button>
 
             {/* Success Message */}
@@ -925,37 +1163,55 @@ function TopUpSection({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[400px]">
-              <div className="space-y-3">
-                {users.map((user) => (
-                  <div
-                    key={user.id}
-                    className={`p-4 rounded-lg border transition-colors cursor-pointer ${
-                      selectedUserId === user.id
+            {usersLoading ? (
+              <LoadingSpinner label="Memuat daftar pelanggan..." />
+            ) : usersError ? (
+              <ErrorState message={usersError} onRetry={onRetryUsers} />
+            ) : users.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-2">
+                <Users className="w-10 h-10 text-muted-foreground opacity-40" />
+                <p className="text-muted-foreground text-sm">
+                  Belum ada pelanggan terdaftar.
+                </p>
+              </div>
+            ) : (
+              <ScrollArea className="h-[400px]">
+                <div className="space-y-3">
+                  {users.map((user) => (
+                    <div
+                      key={user.id}
+                      className={`p-4 rounded-lg border transition-colors cursor-pointer ${selectedUserId === user.id
                         ? "bg-primary/10 border-primary"
                         : "bg-secondary border-transparent hover:border-border"
-                    }`}
-                    onClick={() => setSelectedUserId(user.id)}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                        <span className="text-muted-foreground font-semibold">
-                          {user.name.charAt(0).toUpperCase()}
-                        </span>
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-medium text-foreground">{user.name}</p>
-                        <p className="text-sm text-muted-foreground">{user.email}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-muted-foreground">Saldo</p>
-                        <p className="font-bold text-primary">{formatCurrency(user.balance)}</p>
+                        }`}
+                      onClick={() => setSelectedUserId(user.id)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                          <span className="text-muted-foreground font-semibold">
+                            {user.name.charAt(0).toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-foreground">
+                            {user.name}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {user.email}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm text-muted-foreground">Saldo</p>
+                          <p className="font-bold text-primary">
+                            {formatCurrency(user.balance)}
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
           </CardContent>
         </Card>
       </div>
