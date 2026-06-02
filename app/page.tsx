@@ -1,41 +1,41 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { LoginPage } from "@/components/login-page";
 import { PembeliDashboard } from "@/components/pembeli-dashboard";
 import { KasirDashboard } from "@/components/kasir-dashboard";
 import { type User } from "@/lib/data";
-import { getMe } from "@/lib/services/userService";
+import { clearAuthToken, getAuthToken, getProfile } from "@/lib/api";
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isHydrated, setIsHydrated] = useState(false);
-  const [isAuthenticating, setIsAuthenticating] = useState(true);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
 
-  // Tandai bahwa sudah hydrated di client agar tidak ada mismatch SSR
   useEffect(() => {
-    setIsHydrated(true);
+    let isMounted = true;
 
     const restoreSession = async () => {
-      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
-      if (!token) {
-        setIsAuthenticating(false);
+      if (!getAuthToken()) {
+        setIsRestoringSession(false);
         return;
       }
 
       try {
-        const user = await getMe();
-        setCurrentUser(user);
-      } catch {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("token");
-        }
+        const profile = await getProfile();
+        if (isMounted) setCurrentUser(profile);
+      } catch (error) {
+        console.error(error);
+        clearAuthToken();
       } finally {
-        setIsAuthenticating(false);
+        if (isMounted) setIsRestoringSession(false);
       }
     };
 
-    void restoreSession();
+    restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleLogin = (user: User) => {
@@ -43,6 +43,7 @@ export default function Home() {
   };
 
   const handleLogout = () => {
+    clearAuthToken();
     setCurrentUser(null);
   };
 
@@ -52,11 +53,15 @@ export default function Home() {
     }
   };
 
-  // Tunggu hydration sebelum render untuk menghindari localStorage issues
-  if (!isHydrated) {
-    return null;
+  if (isRestoringSession) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
+        Memulihkan sesi...
+      </div>
+    );
   }
 
+  // Show login page if not logged in
   if (!currentUser) {
     return <LoginPage onLogin={handleLogin} />;
   }

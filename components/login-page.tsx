@@ -11,7 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Lock, Mail, Flame, AlertCircle, RefreshCw } from "lucide-react";
+import { Lock, Mail, Flame } from "lucide-react";
 import { type User } from "@/lib/data";
 import { login } from "@/lib/auth";
 import { getMe } from "@/lib/services/userService";
@@ -35,44 +35,10 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       // 1. Login — dapatkan token
       const result = await login(email, password);
 
-      // 2. Simpan token ke localStorage
-      const token = result.accessToken ?? result.token ?? result.access_token;
-      if (token) {
-        localStorage.setItem("token", token);
-      }
-
-      // 3. Fetch data user terbaru (termasuk saldo) via /api/me
-      let userData: User;
-      try {
-        userData = await getMe();
-      } catch {
-        // Fallback jika /api/me tidak tersedia: pakai data dari response login
-        const raw = result.user ?? result;
-        userData = {
-          id: String(raw.id),
-          name: raw.name,
-          email: raw.email,
-          role: String(raw.role).toLowerCase() === "kasir" ? "kasir" : "pembeli",
-          balance: raw.balance ?? raw.saldo ?? 0,
-        };
-      }
-
-      onLogin(userData);
-    } catch (err) {
-      console.error("Login error:", err);
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Terjadi kesalahan. Coba lagi.";
-      // Tampilkan pesan yang ramah
-      setError(
-        message.toLowerCase().includes("401") ||
-          message.toLowerCase().includes("invalid") ||
-          message.toLowerCase().includes("salah") ||
-          message.toLowerCase().includes("incorrect")
-          ? "Email atau password salah."
-          : `Gagal login: ${message}`
-      );
+      onLogin(result.user);
+    } catch (error) {
+      console.error(error);
+      setError(error instanceof Error ? error.message : "Email atau password salah");
     } finally {
       setIsLoading(false);
     }

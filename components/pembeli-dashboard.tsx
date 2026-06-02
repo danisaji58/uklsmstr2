@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,10 +39,7 @@ import {
   type CartItem,
   formatCurrency,
 } from "@/lib/data";
-import { getMenus } from "@/lib/services/menuService";
-import { createTransaction } from "@/lib/services/transactionService";
-import { getMe } from "@/lib/services/userService";
-import { logout } from "@/lib/auth";
+import { createTransaction, getMenus } from "@/lib/api";
 
 interface PembeliDashboardProps {
   user: User;
@@ -72,66 +69,11 @@ interface ReceiptData {
   total: number;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Reusable states
-// ─────────────────────────────────────────────────────────────────────────────
-
-function LoadingGrid() {
-  return (
-    <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div
-          key={i}
-          className="bg-card border border-border rounded-xl overflow-hidden animate-pulse"
-        >
-          <div className="aspect-square bg-secondary" />
-          <div className="p-3 space-y-2">
-            <div className="h-4 bg-secondary rounded w-3/4" />
-            <div className="h-3 bg-secondary rounded w-1/2" />
-            <div className="h-8 bg-secondary rounded mt-2" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ErrorState({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 gap-4 bg-card rounded-xl border border-border">
-      <ServerCrash className="w-12 h-12 text-destructive opacity-60" />
-      <div className="text-center">
-        <p className="text-foreground font-medium">Gagal memuat menu</p>
-        <p className="text-muted-foreground text-sm mt-1">{message}</p>
-      </div>
-      <Button variant="outline" onClick={onRetry} className="gap-2">
-        <RefreshCw className="w-4 h-4" />
-        Coba Lagi
-      </Button>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Component
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function PembeliDashboard({
-  user,
-  onLogout,
-  onBalanceUpdate,
-}: PembeliDashboardProps) {
+export function PembeliDashboard({ user, onLogout, onBalanceUpdate }: PembeliDashboardProps) {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-  const [menuLoading, setMenuLoading] = useState(true);
-  const [menuError, setMenuError] = useState("");
-
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [isMenuLoading, setIsMenuLoading] = useState(true);
+  const [menuError, setMenuError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
@@ -139,27 +81,33 @@ export function PembeliDashboard({
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
 
-  // ─── Fetch menus ──────────────────────────────────────────────────────────
-  const fetchMenus = useCallback(async () => {
-    setMenuLoading(true);
-    setMenuError("");
-    try {
-      const data = await getMenus();
-      setMenuItems(data);
-    } catch (err) {
-      setMenuError(
-        err instanceof Error ? err.message : "Gagal memuat daftar menu."
-      );
-    } finally {
-      setMenuLoading(false);
-    }
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMenus = async () => {
+      setIsMenuLoading(true);
+      setMenuError("");
+
+      try {
+        const menus = await getMenus();
+        if (isMounted) setMenuItems(menus);
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setMenuError(error instanceof Error ? error.message : "Gagal mengambil menu dari backend");
+        }
+      } finally {
+        if (isMounted) setIsMenuLoading(false);
+      }
+    };
+
+    loadMenus();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  useEffect(() => {
-    fetchMenus();
-  }, [fetchMenus]);
-
-  // ─── Filtered menu ─────────────────────────────────────────────────────────
   const filteredMenu = useMemo(() => {
     return menuItems.filter((item) => {
       const matchesSearch = item.name
@@ -216,7 +164,6 @@ export function PembeliDashboard({
     setCart((prev) => prev.filter((item) => item.id !== itemId));
   };
 
-  // ─── Checkout ──────────────────────────────────────────────────────────────
   const handleCheckout = async () => {
     if (cartTotal > user.balance) {
       setCheckoutError(
@@ -226,216 +173,247 @@ export function PembeliDashboard({
     }
     if (cart.length === 0) return;
 
-    setIsCheckingOut(true);
-    setCheckoutError("");
     try {
-      // Buat transaksi di backend
-      const txn = await createTransaction(cart);
-
-      // Generate receipt data dari response backend
-      const receipt: ReceiptData = {
-        transactionId:
-          txn.transactionId ??
-          txn.id ??
-          `TRX-${Date.now().toString(36).toUpperCase()}`,
-        date: txn.date ? new Date(txn.date) : new Date(),
-        customerName: user.name,
-        items: [...cart],
-        total: cartTotal,
-      };
-
-      // Ambil saldo terbaru dari backend setelah transaksi
-      try {
-        const me = await getMe();
-        onBalanceUpdate(me.balance);
-      } catch {
-        // Fallback: kurangi saldo secara lokal
-        onBalanceUpdate(user.balance - cartTotal);
-      }
-
-      setCart([]);
-      setReceiptData(receipt);
-      setIsReceiptOpen(true);
-    } catch (err) {
-      setCheckoutError(
-        err instanceof Error ? err.message : "Terjadi kesalahan saat checkout."
-      );
-    } finally {
-      setIsCheckingOut(false);
+      await createTransaction(user.id, cart.map((item) => ({ menuId: item.id, quantity: item.quantity })));
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Gagal membuat transaksi");
+      return;
     }
-  };
 
-  const handleLogout = () => {
-    logout();
-    onLogout();
-  };
+    // Generate receipt data
+    const receipt: ReceiptData = {
+      transactionId: `TRX-${Date.now().toString(36).toUpperCase()}`,
+      date: new Date(),
+      customerName: user.name,
+      items: [...cart],
+      total: cartTotal,
+    };
 
-  const categories = ["all", "mie", "dimsum", "minuman", "topping"] as const;
+    // Generate receipt data dari response backend
+    const receipt: ReceiptData = {
+      transactionId:
+        txn.transactionId ??
+        txn.id ??
+        `TRX-${Date.now().toString(36).toUpperCase()}`,
+      date: txn.date ? new Date(txn.date) : new Date(),
+      customerName: user.name,
+      items: [...cart],
+      total: cartTotal,
+    };
 
-  return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-card/95 backdrop-blur-sm border-b border-border">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Flame className="w-5 h-5 text-primary" />
-                </div>
-                <div className="hidden sm:block">
-                  <h1 className="font-bold text-foreground">Mie Gacoan</h1>
-                  <p className="text-xs text-muted-foreground">Kiosk System</p>
-                </div>
+    // Ambil saldo terbaru dari backend setelah transaksi
+    try {
+      const me = await getMe();
+      onBalanceUpdate(me.balance);
+    } catch {
+      // Fallback: kurangi saldo secara lokal
+      onBalanceUpdate(user.balance - cartTotal);
+    }
+
+    setCart([]);
+    setReceiptData(receipt);
+    setIsReceiptOpen(true);
+  } catch (err) {
+    setCheckoutError(
+      err instanceof Error ? err.message : "Terjadi kesalahan saat checkout."
+    );
+  } finally {
+    setIsCheckingOut(false);
+  }
+};
+
+const handleLogout = () => {
+  logout();
+  onLogout();
+};
+
+const categories = ["all", "mie", "dimsum", "minuman", "topping"] as const;
+
+return (
+  <div className="min-h-screen bg-background flex flex-col">
+    {/* Header */}
+    <header className="sticky top-0 z-50 bg-card/95 backdrop-blur-sm border-b border-border">
+      <div className="container mx-auto px-4 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <Flame className="w-5 h-5 text-primary" />
               </div>
-              <Separator orientation="vertical" className="h-8 hidden sm:block" />
               <div className="hidden sm:block">
-                <p className="text-sm font-medium text-foreground">
-                  {user.name}
-                </p>
-                <Badge
-                  variant="secondary"
-                  className="text-xs bg-secondary text-secondary-foreground"
-                >
-                  PEMBELI
-                </Badge>
+                <h1 className="font-bold text-foreground">Mie Gacoan</h1>
+                <p className="text-xs text-muted-foreground">Kiosk System</p>
               </div>
             </div>
-
-            {/* Balance Card */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-primary/10 px-4 py-2 rounded-lg border border-primary/20">
-                <Wallet className="w-4 h-4 text-primary" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Sisa Saldo</p>
-                  <p className="font-bold text-primary">
-                    {formatCurrency(user.balance)}
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleLogout}
-                className="text-muted-foreground hover:text-foreground hover:bg-secondary"
+            <Separator orientation="vertical" className="h-8 hidden sm:block" />
+            <div className="hidden sm:block">
+              <p className="text-sm font-medium text-foreground">
+                {user.name}
+              </p>
+              <Badge
+                variant="secondary"
+                className="text-xs bg-secondary text-secondary-foreground"
               >
-                <LogOut className="w-5 h-5" />
-              </Button>
+                PEMBELI
+              </Badge>
             </div>
           </div>
 
-          {/* Search & Categories */}
-          <div className="mt-4 space-y-3 w-full max-w-full min-w-0 overflow-hidden">
-            <div className="relative w-full max-w-full min-w-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-              <Input
-                placeholder="Cari menu..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 w-full max-w-full bg-secondary border-border text-foreground placeholder:text-muted-foreground min-w-0"
-              />
+          {/* Balance Card */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-primary/10 px-4 py-2 rounded-lg border border-primary/20">
+              <Wallet className="w-4 h-4 text-primary" />
+              <div>
+                <p className="text-xs text-muted-foreground">Sisa Saldo</p>
+                <p className="font-bold text-primary">
+                  {formatCurrency(user.balance)}
+                </p>
+              </div>
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-1 w-full max-w-full flex-nowrap whitespace-nowrap scrollbar-none touch-pan-x select-none">
-              {categories.map((cat) => {
-                const Icon =
-                  cat === "all"
-                    ? UtensilsCrossed
-                    : categoryIcons[cat as keyof typeof categoryIcons];
-                return (
-                  <Button
-                    key={cat}
-                    variant={activeCategory === cat ? "default" : "secondary"}
-                    size="sm"
-                    onClick={() => setActiveCategory(cat)}
-                    className={
-                      activeCategory === cat
-                        ? "bg-primary text-primary-foreground hover:bg-primary/90 shrink-0 transition-colors"
-                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80 shrink-0 transition-colors"
-                    }
-                  >
-                    <Icon className="w-4 h-4 mr-1 shrink-0" />
-                    {cat === "all"
-                      ? "Semua"
-                      : categoryLabels[cat as keyof typeof categoryLabels]}
-                  </Button>
-                );
-              })}
-            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleLogout}
+              className="text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <LogOut className="w-5 h-5" />
+            </Button>
           </div>
         </div>
-      </header>
 
-      {/* Main Content */}
-      <main className="flex-1 container mx-auto px-4 py-6 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 min-w-0 max-w-full">
-        {/* Product Area */}
-        <section className="product-area min-w-0 flex flex-col gap-6 w-full pb-20 md:pb-4">
-          {menuLoading ? (
-            <LoadingGrid />
-          ) : menuError ? (
-            <ErrorState message={menuError} onRetry={fetchMenus} />
-          ) : filteredMenu.length === 0 ? (
-            <div className="text-center py-12 bg-card rounded-xl border border-border">
-              <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-muted-foreground font-medium">
-                {searchQuery || activeCategory !== "all"
-                  ? "Menu tidak ditemukan."
-                  : "Belum ada menu tersedia."}
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
-              {filteredMenu.map((item) => (
-                <MenuCard
-                  key={item.id}
-                  item={item}
-                  onAdd={addToCart}
-                  inCart={cart.find((c) => c.id === item.id)?.quantity || 0}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Cart Sidebar - Desktop */}
-        <aside className="cart-area min-w-0 hidden md:block xl:sticky xl:top-[100px] xl:h-[calc(100vh-130px)]">
-          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden h-full flex flex-col">
-            <CartSidebar
-              cart={cart}
-              total={cartTotal}
-              userBalance={user.balance}
-              onUpdateQuantity={updateQuantity}
-              onRemove={removeFromCart}
-              onCheckout={handleCheckout}
-              isCheckingOut={isCheckingOut}
-              checkoutError={checkoutError}
+        {/* Search & Categories */}
+        <div className="mt-4 space-y-3 w-full max-w-full min-w-0 overflow-hidden">
+          <div className="relative w-full max-w-full min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Cari menu..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 w-full max-w-full bg-secondary border-border text-foreground placeholder:text-muted-foreground min-w-0"
             />
           </div>
-        </aside>
-      </main>
-
-      {/* Cart Button & Drawer - Mobile */}
-      <div className="md:hidden fixed bottom-4 left-4 right-4 z-50">
-        <MobileCartButton
-          itemCount={cartItemCount}
-          total={cartTotal}
-          cart={cart}
-          userBalance={user.balance}
-          onUpdateQuantity={updateQuantity}
-          onRemove={removeFromCart}
-          onCheckout={handleCheckout}
-          isCheckingOut={isCheckingOut}
-          checkoutError={checkoutError}
-        />
+          <div className="flex gap-2 overflow-x-auto pb-1 w-full max-w-full flex-nowrap whitespace-nowrap scrollbar-none touch-pan-x select-none">
+            {categories.map((cat) => {
+              const Icon =
+                cat === "all"
+                  ? UtensilsCrossed
+                  : categoryIcons[cat as keyof typeof categoryIcons];
+              return (
+                <Button
+                  key={cat}
+                  variant={activeCategory === cat ? "default" : "secondary"}
+                  size="sm"
+                  onClick={() => setActiveCategory(cat)}
+                  className={
+                    activeCategory === cat
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90 shrink-0 transition-colors"
+                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80 shrink-0 transition-colors"
+                  }
+                >
+                  <Icon className="w-4 h-4 mr-1 shrink-0" />
+                  {cat === "all"
+                    ? "Semua"
+                    : categoryLabels[cat as keyof typeof categoryLabels]}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
       </div>
+    </header>
 
-      {/* Receipt Modal */}
-      <ReceiptModal
-        isOpen={isReceiptOpen}
-        onClose={() => setIsReceiptOpen(false)}
-        receiptData={receiptData}
+    {/* Main Content */}
+    <main className="flex-1 container mx-auto px-4 py-6 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6 min-w-0 max-w-full">
+      {/* Product Area */}
+      <section className="product-area min-w-0 flex flex-col gap-6 w-full pb-20 md:pb-4">
+        {menuError && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+            {menuError}
+          </div>
+        )}
+
+        {isMenuLoading ? (
+          <div className="text-center py-12 bg-card rounded-xl border border-border">
+            <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4 animate-pulse" />
+            <p className="text-muted-foreground font-medium">Memuat menu dari backend...</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
+            {filteredMenu.map((item) => (
+              <MenuCard
+                key={item.id}
+                item={item}
+                onAdd={addToCart}
+                inCart={cart.find((c) => c.id === item.id)?.quantity || 0}
+              />
+            ))}
+          </div>
+        )}
+
+        {!isMenuLoading && filteredMenu.length === 0 && (
+          <div className="text-center py-12 bg-card rounded-xl border border-border">
+            <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+            <p className="text-muted-foreground font-medium">
+              {searchQuery || activeCategory !== "all"
+                ? "Menu tidak ditemukan."
+                : "Belum ada menu tersedia."}
+            </p>
+          </div>
+        ) : (
+        <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-4 w-full">
+          {filteredMenu.map((item) => (
+            <MenuCard
+              key={item.id}
+              item={item}
+              onAdd={addToCart}
+              inCart={cart.find((c) => c.id === item.id)?.quantity || 0}
+            />
+          ))}
+        </div>
+          )}
+      </section>
+
+      {/* Cart Sidebar - Desktop */}
+      <aside className="cart-area min-w-0 hidden md:block xl:sticky xl:top-[100px] xl:h-[calc(100vh-130px)]">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden h-full flex flex-col">
+          <CartSidebar
+            cart={cart}
+            total={cartTotal}
+            userBalance={user.balance}
+            onUpdateQuantity={updateQuantity}
+            onRemove={removeFromCart}
+            onCheckout={handleCheckout}
+            isCheckingOut={isCheckingOut}
+            checkoutError={checkoutError}
+          />
+        </div>
+      </aside>
+    </main>
+
+    {/* Cart Button & Drawer - Mobile */}
+    <div className="md:hidden fixed bottom-4 left-4 right-4 z-50">
+      <MobileCartButton
+        itemCount={cartItemCount}
+        total={cartTotal}
+        cart={cart}
+        userBalance={user.balance}
+        onUpdateQuantity={updateQuantity}
+        onRemove={removeFromCart}
+        onCheckout={handleCheckout}
+        isCheckingOut={isCheckingOut}
+        checkoutError={checkoutError}
       />
     </div>
-  );
+
+    {/* Receipt Modal */}
+    <ReceiptModal
+      isOpen={isReceiptOpen}
+      onClose={() => setIsReceiptOpen(false)}
+      receiptData={receiptData}
+    />
+  </div>
+);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -455,9 +433,8 @@ function MenuCard({
 
   return (
     <Card
-      className={`h-full flex flex-col justify-between bg-card border-border overflow-hidden transition-all hover:border-primary/50 min-w-0 ${
-        isOutOfStock ? "opacity-60" : ""
-      }`}
+      className={`h-full flex flex-col justify-between bg-card border-border overflow-hidden transition-all hover:border-primary/50 min-w-0 ${isOutOfStock ? "opacity-60" : ""
+        }`}
     >
       <CardContent className="p-3 flex flex-col flex-1 min-w-0">
         <div className="relative aspect-square bg-secondary rounded-lg mb-3 flex items-center justify-center overflow-hidden shrink-0">
@@ -497,13 +474,12 @@ function MenuCard({
             </p>
             <Badge
               variant="outline"
-              className={`text-[10px] sm:text-xs truncate max-w-[65px] sm:max-w-none ${
-                item.stock > 10
+              className={`text-[10px] sm:text-xs truncate max-w-[65px] sm:max-w-none ${item.stock > 10
                   ? "border-success/50 text-success bg-success/5"
                   : item.stock > 0
-                  ? "border-warning/50 text-warning bg-warning/5"
-                  : "border-destructive/50 text-destructive bg-destructive/5"
-              }`}
+                    ? "border-warning/50 text-warning bg-warning/5"
+                    : "border-destructive/50 text-destructive bg-destructive/5"
+                }`}
             >
               {item.stock > 0 ? `${item.stock} pcs` : "Habis"}
             </Badge>

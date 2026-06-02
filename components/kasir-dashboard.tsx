@@ -1,13 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -55,15 +49,12 @@ import {
   RefreshCw,
   ServerCrash,
 } from "lucide-react";
-import { type User, type MenuItem, formatCurrency } from "@/lib/data";
 import {
-  getMenus,
-  createMenu,
-  updateMenu,
-  deleteMenu,
-} from "@/lib/services/menuService";
-import { getUsers, topUpUser } from "@/lib/services/userService";
-import { logout } from "@/lib/auth";
+  type User,
+  type MenuItem,
+  formatCurrency
+} from "@/lib/data";
+import { createMenu, deleteMenu, getMenus, getUsers, topUpUser, updateMenu } from "@/lib/api";
 
 interface KasirDashboardProps {
   user: User;
@@ -111,18 +102,11 @@ function ErrorState({
 
 export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
   const [activeTab, setActiveTab] = useState<"menu" | "topup">("menu");
-
-  // ── Menu state ──────────────────────────────────────────────────────────────
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-  const [menuLoading, setMenuLoading] = useState(true);
-  const [menuError, setMenuError] = useState("");
-
-  // ── User state ──────────────────────────────────────────────────────────────
   const [users, setUsers] = useState<User[]>([]);
-  const [usersLoading, setUsersLoading] = useState(true);
-  const [usersError, setUsersError] = useState("");
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  // ── Search & dialog state ────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
@@ -151,48 +135,35 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
   >("mie");
   const [newMenuImageUrl, setNewMenuImageUrl] = useState("");
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Data fetching
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  const fetchMenus = useCallback(async () => {
-    setMenuLoading(true);
-    setMenuError("");
-    try {
-      const data = await getMenus();
-      setMenuItems(data);
-    } catch (err) {
-      setMenuError(
-        err instanceof Error ? err.message : "Gagal memuat menu."
-      );
-    } finally {
-      setMenuLoading(false);
-    }
-  }, []);
-
-  const fetchUsers = useCallback(async () => {
-    setUsersLoading(true);
-    setUsersError("");
-    try {
-      const data = await getUsers();
-      setUsers(data);
-    } catch (err) {
-      setUsersError(
-        err instanceof Error ? err.message : "Gagal memuat data pelanggan."
-      );
-    } finally {
-      setUsersLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchMenus();
-    fetchUsers();
-  }, [fetchMenus, fetchUsers]);
+    let isMounted = true;
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Derived data
-  // ─────────────────────────────────────────────────────────────────────────────
+    const loadDashboardData = async () => {
+      setIsLoadingData(true);
+      setErrorMessage("");
+
+      try {
+        const [menus, userList] = await Promise.all([getMenus(), getUsers()]);
+        if (isMounted) {
+          setMenuItems(menus);
+          setUsers(userList.filter((item) => item.role === "pembeli"));
+        }
+      } catch (error) {
+        console.error(error);
+        if (isMounted) {
+          setErrorMessage(error instanceof Error ? error.message : "Gagal mengambil data dari backend");
+        }
+      } finally {
+        if (isMounted) setIsLoadingData(false);
+      }
+    };
+
+    loadDashboardData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const filteredMenu = useMemo(() => {
     return menuItems.filter((item) =>
@@ -209,9 +180,56 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
     };
   }, [menuItems, users]);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Form helpers
-  // ─────────────────────────────────────────────────────────────────────────────
+  const handleAddMenu = async () => {
+    try {
+      const newItem = await createMenu({
+        name: newMenuName,
+        price: parseInt(newMenuPrice) || 0,
+        stock: parseInt(newMenuStock) || 0,
+        category: newMenuCategory,
+        imageUrl: newMenuImageUrl || undefined,
+      });
+      setMenuItems((current) => [...current, newItem]);
+      setIsAddMenuOpen(false);
+      resetMenuForm();
+    } catch (error) {
+      console.error(error);
+      setErrorMessage(error instanceof Error ? error.message : "Gagal menambahkan menu");
+    }
+  };
+
+  const handleEditMenu = async () => {
+    if (!selectedMenuItem) return;
+
+    try {
+      const updatedItem = await updateMenu(selectedMenuItem.id, {
+        price: parseInt(newMenuPrice) || selectedMenuItem.price,
+        stock: parseInt(newMenuStock) || selectedMenuItem.stock,
+        imageUrl: newMenuImageUrl || selectedMenuItem.imageUrl,
+      });
+      setMenuItems((current) => current.map((item) => (item.id === selectedMenuItem.id ? updatedItem : item)));
+      setIsEditMenuOpen(false);
+      setSelectedMenuItem(null);
+      resetMenuForm();
+    } catch (error) {
+      console.error(error);
+      setErrorMessage(error instanceof Error ? error.message : "Gagal mengubah menu");
+    }
+  };
+
+  const handleDeleteMenu = async () => {
+    if (!selectedMenuItem) return;
+
+    try {
+      await deleteMenu(selectedMenuItem.id);
+      setMenuItems((current) => current.filter((item) => item.id !== selectedMenuItem.id));
+      setIsDeleteMenuOpen(false);
+      setSelectedMenuItem(null);
+    } catch (error) {
+      console.error(error);
+      setErrorMessage(error instanceof Error ? error.message : "Gagal menghapus menu");
+    }
+  };
 
   const resetMenuForm = () => {
     setNewMenuName("");
@@ -236,107 +254,23 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
     setIsDeleteMenuOpen(true);
   };
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // CRUD handlers — semua pakai backend
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  const handleAddMenu = async () => {
-    if (!newMenuName || !newMenuPrice || !newMenuStock) return;
-
-    setIsSaving(true);
-    setSaveError("");
-
-    try {
-      const created = await createMenu({
-        name: newMenuName,
-        price: parseInt(newMenuPrice),
-        stock: parseInt(newMenuStock),
-        category: newMenuCategory,
-        imageUrl: newMenuImageUrl || undefined,
-      });
-
-      setMenuItems((prev) => [...prev, created]);
-
-      setIsAddMenuOpen(false);
-      resetMenuForm();
-    } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : "Gagal menambah menu."
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleEditMenu = async () => {
-    if (!selectedMenuItem) return;
-    setIsSaving(true);
-    setSaveError("");
-    try {
-      const updated = await updateMenu(selectedMenuItem.id, {
-        price: parseInt(newMenuPrice) || selectedMenuItem.price,
-        stock: parseInt(newMenuStock) || selectedMenuItem.stock,
-        imageUrl: newMenuImageUrl || selectedMenuItem.imageUrl,
-      });
-      setMenuItems((prev) =>
-        prev.map((item) =>
-          item.id === selectedMenuItem.id ? { ...item, ...updated } : item
-        )
-      );
-      setIsEditMenuOpen(false);
-      setSelectedMenuItem(null);
-      resetMenuForm();
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Gagal mengubah menu.");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDeleteMenu = async () => {
-    if (!selectedMenuItem) return;
-    setIsSaving(true);
-    try {
-      await deleteMenu(selectedMenuItem.id);
-      setMenuItems((prev) =>
-        prev.filter((item) => item.id !== selectedMenuItem.id)
-      );
-      setIsDeleteMenuOpen(false);
-      setSelectedMenuItem(null);
-    } catch (err) {
-      setSaveError(
-        err instanceof Error ? err.message : "Gagal menghapus menu."
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const handleTopUp = async () => {
     const amount = parseInt(topUpAmount) || 0;
     if (!selectedUserId || amount <= 0) return;
 
-    setTopUpLoading(true);
-    setTopUpError("");
-    setTopUpSuccess(false);
     try {
-      await topUpUser(selectedUserId, amount);
-      // Update saldo user di state lokal
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === selectedUserId ? { ...u, balance: u.balance + amount } : u
-        )
-      );
+      const updatedUser = await topUpUser(selectedUserId, amount);
+      setUsers((current) => current.map((item) => {
+        if (item.id !== selectedUserId) return item;
+        return updatedUser ? updatedUser : { ...item, balance: item.balance + amount };
+      }));
       setTopUpSuccess(true);
       setSelectedUserId("");
       setTopUpAmount("");
-      setTimeout(() => setTopUpSuccess(false), 4000);
-    } catch (err) {
-      setTopUpError(
-        err instanceof Error ? err.message : "Gagal memproses top up."
-      );
-    } finally {
-      setTopUpLoading(false);
+      setTimeout(() => setTopUpSuccess(false), 3000);
+    } catch (error) {
+      console.error(error);
+      setErrorMessage(error instanceof Error ? error.message : "Gagal top up saldo");
     }
   };
 
@@ -464,7 +398,14 @@ export function KasirDashboard({ user, onLogout }: KasirDashboardProps) {
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
-        {activeTab === "menu" ? (
+        {errorMessage && (
+          <div className="m-6 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        )}
+        {isLoadingData ? (
+          <div className="p-6 text-muted-foreground">Memuat data dari backend...</div>
+        ) : activeTab === "menu" ? (
           <MenuManagement
             menuItems={filteredMenu}
             menuLoading={menuLoading}
