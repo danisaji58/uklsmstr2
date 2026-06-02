@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Lock, Mail, Flame } from "lucide-react";
-import { sampleUsers, type User } from "@/lib/data";
+import { type User } from "@/lib/data";
 import { login } from "@/lib/auth";
 
 interface LoginPageProps {
@@ -27,37 +27,15 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     try {
       const result = await login(email, password);
 
-      console.log("Login berhasil:", result);
-
-      // Simpan token
-      localStorage.setItem("token", result.accessToken);
-
-      // Masuk ke dashboard
-      onLogin({
-        id: String(result.user.id),
-        name: result.user.name,
-        email: result.user.email,
-        role:
-          result.user.role === "KASIR"
-            ? "kasir"
-            : "pembeli",
-        balance: 0,
-      });
+      onLogin(result.user);
     } catch (error) {
       console.error(error);
-      setError("Email atau password salah");
+      setError(error instanceof Error ? error.message : "Email atau password salah");
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleQuickLogin = (role: "pembeli" | "kasir") => {
-    const user = sampleUsers.find((u) => u.role === role);
-
-    if (user) {
-      onLogin(user);
-    }
-  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
